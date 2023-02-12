@@ -1,0 +1,124 @@
+variables:
+  GCP_PROJECT_ID: avelov-234411
+
+build:test:
+  image:
+    name: docker:latest
+  stage: build
+  when: manual
+  services:
+    - name: docker:dind
+      entrypoint: ["env", "-u", "DOCKER_HOST"]
+      command: ["dockerd-entrypoint.sh"]
+  environment:
+    name: test
+  variables:
+    GIT_DEPTH: "10"
+    DOCKER_HOST: "tcp://localhost:2375/"
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+    HELM_DESIRED_VERSION: v3.0.0
+    KUBECTL_DESIRED_VERSION: v1.15.0
+  before_script:
+    - cat ${GCLOUD_SERVICE_KEY} | docker login -u _json_key --password-stdin https://gcr.io
+  script:
+    - docker pull gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest || true
+    - docker build
+        --build-arg helm_desired_version=${HELM_DESIRED_VERSION}
+        --build-arg kubectl_desired_version=${KUBECTL_DESIRED_VERSION}
+        -t gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:${HELM_DESIRED_VERSION}
+        -t gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest
+        --cache-from gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest .
+    - docker push gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:${HELM_DESIRED_VERSION}
+    - docker push gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest
+  only:
+    - test
+
+build:prod:
+  image:
+    name: docker:latest
+  stage: build
+  when: manual
+  services:
+    - name: docker:dind
+      entrypoint: ["env", "-u", "DOCKER_HOST"]
+      command: ["dockerd-entrypoint.sh"]
+  environment:
+    name: prod
+  variables:
+    GIT_DEPTH: "10"
+    DOCKER_HOST: "tcp://localhost:2375/"
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+    HELM_DESIRED_VERSION: v3.0.0
+    KUBECTL_DESIRED_VERSION: v1.15.0
+  before_script:
+    - cat ${GCLOUD_SERVICE_KEY} | docker login -u _json_key --password-stdin https://gcr.io
+  script:
+    - docker pull gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest || true
+    - docker build
+        --build-arg helm_desired_version=${HELM_DESIRED_VERSION}
+        --build-arg kubectl_desired_version=${KUBECTL_DESIRED_VERSION}
+        -t gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:${HELM_DESIRED_VERSION}
+        -t gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest
+        --cache-from gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest .
+    - docker push gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:${HELM_DESIRED_VERSION}
+    - docker push gcr.io/${GCP_PROJECT_ID}/helpers/${CI_ENVIRONMENT_NAME}/helm:latest
+  only:
+    - master
+
+lint:
+  image:
+    name: gcr.io/avelov-234411/helpers/prod/helm:latest
+    entrypoint: ["/bin/sh", "-c"]
+  stage: test
+  script:
+    - |
+      for C in $(find charts -name 'Chart.yaml'); do
+        dirname $C;
+        helm lint `dirname $C`;
+      done
+
+gcs:prod:
+  image:
+    name: gcr.io/avelov-234411/helpers/${CI_ENVIRONMENT_NAME}/helm:latest
+  stage: deploy
+  environment:
+    name: prod
+  dependencies:
+    - lint
+  script:
+    - |
+      for C in $(find charts -name 'Chart.yaml'); do
+        helm package `dirname $C`;
+      done
+    - helm gcs init gs://atd-helm-charts/${CI_ENVIRONMENT_NAME} --service-account ${GCLOUD_SERVICE_KEY}
+    - helm repo add atd-helm-charts gs://atd-helm-charts/${CI_ENVIRONMENT_NAME}
+    - |
+      for C in *.tgz; do
+         echo $C; helm gcs push $C atd-helm-charts --service-account ${GCLOUD_SERVICE_KEY} --force; sleep .5;
+      done
+  only:
+    - master
+
+gcs:test:
+  image:
+    name: gcr.io/avelov-234411/helpers/${CI_ENVIRONMENT_NAME}/helm:latest
+  stage: deploy
+  environment:
+    name: test
+  dependencies:
+    - lint
+  script:
+    - |
+      for C in $(find charts -name 'Chart.yaml'); do
+        helm package `dirname $C`;
+      done
+    - helm gcs init gs://atd-helm-charts/${CI_ENVIRONMENT_NAME} --service-account ${GCLOUD_SERVICE_KEY}
+    - helm repo add atd-helm-charts gs://atd-helm-charts/${CI_ENVIRONMENT_NAME}
+    - |
+      for C in *.tgz; do
+        echo $C; helm gcs push $C atd-helm-charts --service-account ${GCLOUD_SERVICE_KEY} --force; sleep .5;
+      done
+  only:
+    - test
